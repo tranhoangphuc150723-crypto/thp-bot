@@ -7,6 +7,7 @@
     "start": "node bot.js"
   },
   "dependencies": {
+    "express": "*",
     "fca-unofficial": "*"
   }
 }
