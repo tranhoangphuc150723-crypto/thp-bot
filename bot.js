@@ -1,12 +1,11 @@
 /**
- * THP BOT - ZALO VERSION (COMPLETE WITH EXPRESS SERVER FOR RENDER 24/7)
+ * THP BOT - ZALO VERSION (COMPLETE WITH EXPRESS SERVER & DYNAMIC ADMIN CLAIMING)
  */
 const fs = require('fs');
 const path = require('path');
 const { Zalo, ThreadType } = require('zca-js');
 const express = require('express');
 
-// Tạo web server đơn giản để Render không bị tắt bot (ngủ đông)
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -29,13 +28,14 @@ function loadDatabase() {
                 groupTeamProfiles: data.groupTeamProfiles || {},
                 groupRentalExpiry: data.groupRentalExpiry || {},
                 antiSettings: data.antiSettings || {},
-                teams: data.teams || {}
+                teams: data.teams || {},
+                adminId: data.adminId || null
             };
         } catch (e) {
             console.error("Lỗi đọc database:", e);
         }
     }
-    return { userRemainingTurns: {}, groupTeamProfiles: {}, groupRentalExpiry: {}, antiSettings: {}, teams: {} };
+    return { userRemainingTurns: {}, groupTeamProfiles: {}, groupRentalExpiry: {}, antiSettings: {}, teams: {}, adminId: null };
 }
 
 let db = loadDatabase();
@@ -44,16 +44,17 @@ let groupTeamProfiles = db.groupTeamProfiles;
 let groupRentalExpiry = db.groupRentalExpiry;
 let antiSettings = db.antiSettings;
 let teams = db.teams;
+let ADMIN_ID = db.adminId; // Được nhận diện động qua lệnh .chu hoặc .chủ
 
 function saveDatabase() {
-    const data = { userRemainingTurns, groupTeamProfiles, groupRentalExpiry, antiSettings, teams };
+    const data = { userRemainingTurns, groupTeamProfiles, groupRentalExpiry, antiSettings, teams, adminId: ADMIN_ID };
     fs.writeFileSync(dbFile, JSON.stringify(data, null, 2));
 }
 
-const ADMIN_ID = "0344262218"; // Thay số điện thoại hoặc ID Zalo chủ bot nếu cần
+const COOKIE_STRING = "DÁN_CHUỖI_COOKIE_CỦA_BẠN_VÀO_ĐÂY";
 
 function getAndDecreaseTurn(threadId, senderId = null) {
-    if (senderId === ADMIN_ID) {
+    if (ADMIN_ID && senderId === ADMIN_ID) {
         return `Vĩnh viễn (Chủ bot)`;
     }
     const personalKey = `${threadId}_${senderId}`;
@@ -72,10 +73,7 @@ function calculateRental(currentExpiry, addDays = null, isVohan = false) {
     let expiryDate;
 
     if (isVohan) {
-        return {
-            timeLeftStr: "Vĩnh viễn",
-            expiryDateStr: "Vĩnh viễn"
-        };
+        return { timeLeftStr: "Vĩnh viễn", expiryDateStr: "Vĩnh viễn" };
     }
 
     if (addDays) {
@@ -107,13 +105,28 @@ async function handleIncomingMessage(api, message) {
     const threadId = message.threadId;
     const senderId = message.uidFrom;
     const content = message.data && message.data.content ? message.data.content.trim() : "";
-    const threadType = message.type; // ThreadType.User hoặc ThreadType.Group
+    const threadType = message.type;
     const messageReply = message.data && message.data.quote ? message.data.quote : null;
 
     if (!content) return;
     const text = content;
 
-    // Xử lý logic CPR
+    if (text === ".chủ" || text === ".chu") {
+        if (!ADMIN_ID) {
+            ADMIN_ID = senderId;
+            saveDatabase();
+            await api.sendMessage({ msg: "🟢bạn là chủ 🤖BOT THP 🤖 này ❤️❤️❤️" }, threadId, threadType);
+            return;
+        }
+
+        if (senderId === ADMIN_ID) {
+            await api.sendMessage({ msg: "🟢bạn là chủ 🤖BOT THP 🤖 này ❤️❤️❤️" }, threadId, threadType);
+        } else {
+            await api.sendMessage({ msg: "❌mầy dell đủ năng lực ok" }, threadId, threadType);
+        }
+        return;
+    }
+
     if (/^cpr\d+$/i.test(text)) {
         const targetPts = parseInt(text.replace(/cpr/i, ""));
         const groupTeams = teams[threadId] || [];
@@ -125,11 +138,9 @@ async function handleIncomingMessage(api, message) {
 
         let resultText = `📊 TÍNH TOÁN CPR MỤC TIÊU: ${targetPts} ĐIỂM\n`;
         resultText += `----------------------------------\n`;
-        
         groupTeams.forEach((team, index) => {
             resultText += `${index + 1}. ${team.name}.${team.id} ➔ Cần tối ưu để đạt ${targetPts} pts\n`;
         });
-        
         resultText += `----------------------------------\n`;
         resultText += `💡 Dựa trên danh sách .hs list hiện tại của nhóm.`;
 
@@ -138,14 +149,12 @@ async function handleIncomingMessage(api, message) {
     }
 
     if (text === ".hs all") {
-        if (senderId !== ADMIN_ID) {
+        if (ADMIN_ID && senderId !== ADMIN_ID) {
             await api.sendMessage({ msg: "❌ Chỉ Admin mới được xóa toàn bộ danh sách team!" }, threadId, threadType);
             return;
         }
-
         teams[threadId] = [];
         saveDatabase();
-
         await api.sendMessage({ msg: "🗑️ Đã xóa toàn bộ dữ liệu trong danh sách .hs list của nhóm này!" }, threadId, threadType);
         return;
     }
@@ -156,27 +165,20 @@ async function handleIncomingMessage(api, message) {
             await api.sendMessage({ msg: "⚠️ Vui lòng nhập tên team hoặc ID cần xóa! Ví dụ: .hs xoa TeamA" }, threadId, threadType);
             return;
         }
-
         if (!teams[threadId] || teams[threadId].length === 0) {
             await api.sendMessage({ msg: "📋 Danh sách team hiện đang trống!" }, threadId, threadType);
             return;
         }
-
         const initialLength = teams[threadId].length;
         teams[threadId] = teams[threadId].filter(team => {
             const fullName = `${team.name}.${team.id}`.toLowerCase();
             const target = query.toLowerCase();
-            return team.name.toLowerCase() !== target && 
-                   team.id.toLowerCase() !== target && 
-                   fullName !== target &&
-                   !fullName.includes(target);
+            return team.name.toLowerCase() !== target && team.id.toLowerCase() !== target && fullName !== target && !fullName.includes(target);
         });
-
         if (teams[threadId].length === initialLength) {
             await api.sendMessage({ msg: `⚠️ Không tìm thấy team phù hợp với "${query}" trong danh sách!` }, threadId, threadType);
             return;
         }
-
         saveDatabase();
         await api.sendMessage({ msg: `✅ Đã xóa thành công team khớp với "${query}" khỏi danh sách .hs list!` }, threadId, threadType);
         return;
@@ -185,45 +187,34 @@ async function handleIncomingMessage(api, message) {
     if (text.startsWith(".hs add ")) {
         const contentStr = text.slice(8).trim();
         const firstSpaceIndex = contentStr.indexOf(" ");
-
         if (firstSpaceIndex === -1) {
             await api.sendMessage({ msg: "⚠️ Cú pháp sai! Dùng: .hs add [id game] [tên team]" }, threadId, threadType);
             return;
         }
-
         const gameId = contentStr.slice(0, firstSpaceIndex).trim();
         const teamName = contentStr.slice(firstSpaceIndex + 1).trim();
-
         if (!gameId || !teamName) {
             await api.sendMessage({ msg: "⚠️ ID game hoặc tên team không được để trống!" }, threadId, threadType);
             return;
         }
-
-        if (!teams[threadId]) {
-            teams[threadId] = [];
-        }
-
+        if (!teams[threadId]) teams[threadId] = [];
         teams[threadId].push({ id: gameId, name: teamName });
         saveDatabase();
-
         await api.sendMessage({ msg: `✅ Đã thêm thành công team [${teamName}] với ID [${gameId}] vào danh sách!` }, threadId, threadType);
         return;
     }
 
     if (text.startsWith(".hs list")) {
         const groupTeams = teams[threadId] || [];
-
         if (groupTeams.length === 0) {
             await api.sendMessage({ msg: "📋 Danh sách team hiện đang trống!" }, threadId, threadType);
             return;
         }
-
         let listMsg = `📋 Danh sách team (Trang 1/1):\n`;
         groupTeams.forEach((team, index) => {
             listMsg += `${index + 1}. ${team.name}.${team.id}\n`;
         });
-        listMsg += "\nReply số thứ tự để xem info | del + stt để xóa | page [số] để chuyển trang.";
-
+        listMsg += "\nReply số thứ tự để xem info | del + stt để xóa.";
         await api.sendMessage({ msg: listMsg }, threadId, threadType);
         return;
     }
@@ -231,12 +222,10 @@ async function handleIncomingMessage(api, message) {
     if (text.startsWith(".td ") || text.startsWith(".tdtp ")) {
         const parts = text.split(" ").filter(p => p.trim() !== "");
         const gameId = parts[1];
-
         if (!gameId) {
-            await api.sendMessage({ msg: "⚠️ Vui lòng nhập ID game! Ví dụ: .td 12345 hoặc .td 12345 xoa2" }, threadId, threadType);
+            await api.sendMessage({ msg: "⚠️ Vui lòng nhập ID game! Ví dụ: .td 12345" }, threadId, threadType);
             return;
         }
-
         let deletedIndexNum = null;
         const xoaParam = parts.find(p => /^xoa\d+$/i.test(p));
         if (xoaParam) {
@@ -261,11 +250,7 @@ async function handleIncomingMessage(api, message) {
 7. 01:00 ➟ 03:00
 8. 10:00 ➟ 12:00
 
-• Hướng dẫn sử dụng:
-.tdlg [id] [xoaN] [cprN]
-.tdlg [id] [key] [xoaN] [cprN]
-
-📌 Trả lời (reply) tin nhắn này bằng số tương ứng để chọn khung giờ (vd: 3,4)`;
+📌 Trả lời (reply) tin nhắn này bằng số tương ứng (vd: 3,4)`;
 
         await api.sendMessage({ msg: timeSlotMenu }, threadId, threadType);
         return;
@@ -282,16 +267,10 @@ async function handleIncomingMessage(api, message) {
 🎯 Số trận: 1
 ⏳ Khung giờ: ${dateStr}
 🔑 Key: THP
-🎟 Bạn còn lại: ${remainingTurnStr}
-
-• Hướng dẫn sử dụng:
-.tdlg [id] [xoaN] [cprN]
-.tdlg [id] [key] [xoaN] [cprN]`;
+🎟 Bạn còn lại: ${remainingTurnStr}`;
 
         let msgOptions = { msg: guideMenu };
-        if (fs.existsSync(imagePath)) {
-            msgOptions.filePath = imagePath;
-        }
+        if (fs.existsSync(imagePath)) msgOptions.filePath = imagePath;
 
         await api.sendMessage(msgOptions, threadId, threadType);
         return;
@@ -299,29 +278,16 @@ async function handleIncomingMessage(api, message) {
 
     if (messageReply && messageReply.content && messageReply.content.includes("⏳ Vui lòng chọn khung giờ tính điểm:")) {
         const timeSlots = {
-            "1": "13:00 ➟ 15:00",
-            "2": "15:00 ➟ 17:00",
-            "3": "18:00 ➟ 20:00",
-            "4": "20:00 ➟ 21:50",
-            "5": "21:40 ➟ 23:30",
-            "6": "23:00 ➟ 01:00",
-            "7": "01:00 ➟ 03:00",
-            "8": "10:00 ➟ 12:00"
+            "1": "13:00 ➟ 15:00", "2": "15:00 ➟ 17:00", "3": "18:00 ➟ 20:00", "4": "20:00 ➟ 21:50",
+            "5": "21:40 ➟ 23:30", "6": "23:00 ➟ 01:00", "7": "01:00 ➟ 03:00", "8": "10:00 ➟ 12:00"
         };
-
         const choices = text.split(",").map(s => s.trim());
         const selectedSlots = [];
         let isValid = true;
-
         for (const c of choices) {
-            if (timeSlots[c]) {
-                selectedSlots.push(timeSlots[c]);
-            } else {
-                isValid = false;
-                break;
-            }
+            if (timeSlots[c]) selectedSlots.push(timeSlots[c]);
+            else { isValid = false; break; }
         }
-
         if (!isValid || selectedSlots.length === 0) {
             await api.sendMessage({ msg: "⚠️ Lựa chọn không hợp lệ! Vui lòng reply lại bằng số (ví dụ: 3,4 hoặc 1)." }, threadId, threadType);
             return;
@@ -329,7 +295,6 @@ async function handleIncomingMessage(api, message) {
 
         let gameIdMatch = messageReply.content.match(/\[ID:\s*([^\]]+)\]/);
         let gameId = gameIdMatch ? gameIdMatch[1] : "Không rõ";
-
         let xoaMatch = messageReply.content.match(/\[XoaSTT:\s*(\d+)\]/);
         let xoaLine = xoaMatch ? `🗑️ Đã xóa: ${xoaMatch[1]}\n` : "";
 
@@ -337,20 +302,12 @@ async function handleIncomingMessage(api, message) {
         const remainingTurnStr = getAndDecreaseTurn(threadId, senderId);
         const imagePath = path.join(__dirname, '288.jpg');
 
-        let resultMessage = `🤖 THP BOT
-📊 ID: ${gameId}
-🎯 Số trận: 1
-⏳ Khung giờ: ${timeFormatted}
-🔑 Key: THP\n`;
-        if (xoaLine) {
-            resultMessage += xoaLine;
-        }
+        let resultMessage = `🤖 THP BOT\n📊 ID: ${gameId}\n🎯 Số trận: 1\n⏳ Khung giờ: ${timeFormatted}\n🔑 Key: THP\n`;
+        if (xoaLine) resultMessage += xoaLine;
         resultMessage += `🎟 Bạn còn lại: ${remainingTurnStr}`;
 
         let msgOptions = { msg: resultMessage };
-        if (fs.existsSync(imagePath)) {
-            msgOptions.filePath = imagePath;
-        }
+        if (fs.existsSync(imagePath)) msgOptions.filePath = imagePath;
 
         await api.sendMessage(msgOptions, threadId, threadType);
         return;
@@ -362,7 +319,7 @@ async function handleIncomingMessage(api, message) {
         const subCommand = args[1] ? args[1].toLowerCase() : "";
 
         if (subCommand === "30ngay") {
-            if (senderId !== ADMIN_ID) {
+            if (ADMIN_ID && senderId !== ADMIN_ID) {
                 await api.sendMessage({ msg: "❌ Chỉ chủ bot mới có quyền gia hạn thời gian thuê!" }, threadId, threadType);
                 return;
             }
@@ -370,46 +327,46 @@ async function handleIncomingMessage(api, message) {
             const calc = calculateRental(currentData, 30, false);
             groupRentalExpiry[threadId] = calc.rawExpiry;
             saveDatabase();
-
-            const replyMsg = `📅 THÔNG BÁO BOX ĐƯỢC GIA HẠN THUÊ BOT\n📦 Nhóm: ${boxName}\n⏳ Thời hạn còn lại: ${calc.timeLeftStr}\n📆 Hết hạn: ${calc.expiryDateStr}\n💙 Cảm ơn bạn đã sử dụng dịch vụ thuê BOT THP.`;
-            await api.sendMessage({ msg: replyMsg }, threadId, threadType);
+            await api.sendMessage({ msg: `📅 GIA HẠN THÀNH CÔNG\n📦 Nhóm: ${boxName}\n⏳ Còn lại: ${calc.timeLeftStr}\n📆 Hết hạn: ${calc.expiryDateStr}` }, threadId, threadType);
             return;
         }
-
         if (subCommand === "vohan") {
-            if (senderId !== ADMIN_ID) {
+            if (ADMIN_ID && senderId !== ADMIN_ID) {
                 await api.sendMessage({ msg: "❌ Chỉ chủ bot mới có quyền cấp vĩnh viễn!" }, threadId, threadType);
                 return;
             }
             groupRentalExpiry[threadId] = "vohan";
             saveDatabase();
-
-            const replyMsg = `📅 THÔNG BÁO BOX ĐƯỢC GIA HẠN THUÊ BOT\n📦 Nhóm: ${boxName}\n⏳ Thời hạn còn lại: Vĩnh viễn\n📆 Hết hạn: Vĩnh viễn\n💙 Cảm ơn bạn đã sử dụng dịch vụ thuê BOT THP.`;
-            await api.sendMessage({ msg: replyMsg }, threadId, threadType);
+            await api.sendMessage({ msg: `📅 CẤP VĨNH VIỄN THÀNH CÔNG\n📦 Nhóm: ${boxName}\n⏳ Thời hạn: Vĩnh viễn` }, threadId, threadType);
             return;
         }
 
         const currentData = groupRentalExpiry[threadId];
-        let calc;
-        if (currentData === "vohan") {
-            calc = { timeLeftStr: "Vĩnh viễn", expiryDateStr: "Vĩnh viễn" };
-        } else {
-            calc = calculateRental(currentData, null, false);
-        }
-
-        const statusMsg = `📅 THÔNG BÁO THỜI HẠN THUÊ BOT\n📦 Nhóm: ${boxName}\n⏳ Thời hạn còn lại: ${calc.timeLeftStr}\n📆 Hết hạn: ${calc.expiryDateStr}\n💙 Cảm ơn bạn đã sử dụng dịch vụ thuê BOT THP.`;
-        await api.sendMessage({ msg: statusMsg }, threadId, threadType);
+        let calc = (currentData === "vohan") ? { timeLeftStr: "Vĩnh viễn", expiryDateStr: "Vĩnh viễn" } : calculateRental(currentData, null, false);
+        await api.sendMessage({ msg: `📅 THÔNG BÁO THỜI HẠN THUÊ BOT\n📦 Nhóm: ${boxName}\n⏳ Còn lại: ${calc.timeLeftStr}\n📆 Hết hạn: ${calc.expiryDateStr}` }, threadId, threadType);
         return;
     }
 
     if (messageReply && messageReply.content && messageReply.content.includes("📑 BOT THP") && messageReply.content.includes("Reply số")) {
-        if (senderId !== ADMIN_ID) {
-            await api.sendMessage({ msg: "❌ Chỉ Admin mới được cấu hình Anti!" }, threadId, threadType);
+        let isOwner = (ADMIN_ID && senderId === ADMIN_ID);
+        let isGroupAdminOrDeputy = false;
+        try {
+            const groupInfo = await api.getGroupInfo(threadId);
+            if (groupInfo && groupInfo.gridInfo) {
+                const owners = groupInfo.gridInfo.ownerList || [];
+                const deputies = groupInfo.gridInfo.deputyList || [];
+                if (owners.includes(senderId) || deputies.includes(senderId)) isGroupAdminOrDeputy = true;
+            }
+        } catch (e) {}
+
+        if (!isOwner && !isGroupAdminOrDeputy) {
+            await api.sendMessage({ msg: "❌mầy dell đủ năng lực ok" }, threadId, threadType);
             return;
         }
+
         const choice = parseInt(text);
         if (isNaN(choice) || choice < 1 || choice > 8) {
-            await api.sendMessage({ msg: "⚠️ Lựa chọn không hợp lệ! Vui lòng reply một số từ 1 đến 8." }, threadId, threadType);
+            await api.sendMessage({ msg: "⚠️ Lựa chọn không hợp lệ! Vui lòng reply số từ 1 đến 8." }, threadId, threadType);
             return;
         }
 
@@ -430,75 +387,29 @@ async function handleIncomingMessage(api, message) {
         }
 
         saveDatabase();
-        await api.sendMessage({ msg: `🛡 Đã cập nhật tính năng [${featName}] thành công cho nhóm này!` }, threadId, threadType);
+        await api.sendMessage({ msg: `🛡 Đã cập nhật tính năng [${featName}] thành công!` }, threadId, threadType);
         return;
     }
 
     if (text === ".anti") {
-        if (senderId !== ADMIN_ID) {
-            await api.sendMessage({ msg: "❌ Chỉ Admin mới được dùng lệnh này!" }, threadId, threadType);
+        let isOwner = (ADMIN_ID && senderId === ADMIN_ID);
+        let isGroupAdminOrDeputy = false;
+        try {
+            const groupInfo = await api.getGroupInfo(threadId);
+            if (groupInfo && groupInfo.gridInfo) {
+                const owners = groupInfo.gridInfo.ownerList || [];
+                const deputies = groupInfo.gridInfo.deputyList || [];
+                if (owners.includes(senderId) || deputies.includes(senderId)) isGroupAdminOrDeputy = true;
+            }
+        } catch (e) {}
+
+        if (!isOwner && !isGroupAdminOrDeputy) {
+            await api.sendMessage({ msg: "❌mầy dell đủ năng lực ok" }, threadId, threadType);
             return;
         }
-        const menuMsg = `📑 BOT THP
-──────────────
-1. Anti gửi link 
-2. Anti tag all
-3. Anti đổi tên nhóm 
-4. Anti thay đổi QTV
-5. Anti rời nhóm 
-6. Anti đổi ảnh nhóm 
-7. Anti đổi tên nhóm                                        
-8. Anti spam tin nhắn  
-──────────────
-↩️ Reply số (1-8) để chọn.`;
+
+        const menuMsg = `📑 BOT THP\n──────────────\n1. Anti gửi link \n2. Anti tag all\n3. Anti đổi tên nhóm \n4. Anti thay đổi QTV\n5. Anti rời nhóm \n6. Anti đổi ảnh nhóm \n7. Anti đổi tên nhóm\n8. Anti spam tin nhắn\n──────────────\n↩️ Reply số (1-8) để chọn.`;
         await api.sendMessage({ msg: menuMsg }, threadId, threadType);
-        return;
-    }
-
-    if (text.startsWith(".tangluot ")) {
-        if (senderId !== ADMIN_ID) {
-            await api.sendMessage({ msg: "❌ Chỉ chủ bot mới có quyền sử dụng lệnh này!" }, threadId, threadType);
-            return;
-        }
-        const args = text.split(" ");
-        const targetUserId = args[1];
-        const amount = parseInt(args[2]);
-
-        if (!targetUserId || isNaN(amount)) {
-            await api.sendMessage({ msg: "⚠️ Cú pháp sai! Dùng: .tangluot [UID] [số lượt]" }, threadId, threadType);
-            return;
-        }
-
-        const personalKey = `${threadId}_${targetUserId}`;
-        if (userRemainingTurns[personalKey] === undefined) userRemainingTurns[personalKey] = 100;
-        userRemainingTurns[personalKey] += amount;
-        saveDatabase();
-
-        await api.sendMessage({ msg: `✅ Đã tăng ${amount} lượt cho user ${targetUserId}. Tổng hiện tại: ${userRemainingTurns[personalKey]} lượt.` }, threadId, threadType);
-        return;
-    }
-
-    if (text.startsWith(".giamluot ")) {
-        if (senderId !== ADMIN_ID) {
-            await api.sendMessage({ msg: "❌ Chỉ chủ bot mới có quyền sử dụng lệnh này!" }, threadId, threadType);
-            return;
-        }
-        const args = text.split(" ");
-        const targetUserId = args[1];
-        const amount = parseInt(args[2]);
-
-        if (!targetUserId || isNaN(amount)) {
-            await api.sendMessage({ msg: "⚠️ Cú pháp sai! Dùng: .giamluot [UID] [số lượt]" }, threadId, threadType);
-            return;
-        }
-
-        const personalKey = `${threadId}_${targetUserId}`;
-        if (userRemainingTurns[personalKey] === undefined) userRemainingTurns[personalKey] = 100;
-        
-        userRemainingTurns[personalKey] = Math.max(0, userRemainingTurns[personalKey] - amount);
-        saveDatabase();
-
-        await api.sendMessage({ msg: `✅ Đã giảm ${amount} lượt của user ${targetUserId}. Tổng hiện tại: ${userRemainingTurns[personalKey]} lượt.` }, threadId, threadType);
         return;
     }
 
@@ -512,25 +423,24 @@ async function handleIncomingMessage(api, message) {
 
 async function startBot() {
     try {
-        console.log("Đang khởi động THP Zalo Bot...");
+        console.log("Đang khởi động THP Zalo Bot bằng Cookie...");
         const zalo = new Zalo();
         
-        // Đăng nhập bằng cách quét mã QR hiển thị trực tiếp trong phần Logs của Render
-        const api = await zalo.loginQR();
-        console.log("THP Zalo Bot script loaded successfully and logged in!");
+        const api = await zalo.login({ cookie: COOKIE_STRING });
+        console.log("THP Zalo Bot đăng nhập thành công bằng Cookie!");
 
         api.listener.on("message", async (message) => {
             try {
                 if (message.isSelf) return;
                 await handleIncomingMessage(api, message);
             } catch (err) {
-                console.error("Lỗi lắng nghe sự kiện tin nhắn:", err);
+                console.error("Lỗi lắng nghe tin nhắn:", err);
             }
         });
 
         api.listener.start();
     } catch (error) {
-        console.log("Lỗi khởi động bot Zalo:", error);
+        console.log("Lỗi đăng nhập Cookie Zalo:", error);
     }
 }
 
