@@ -1,9 +1,9 @@
 /**
- * THP BOT - MAIN SCRIPT (COMPLETE VERSION WITH EXPRESS SERVER FOR RENDER 24/7)
+ * THP BOT - ZALO VERSION (COMPLETE WITH EXPRESS SERVER FOR RENDER 24/7)
  */
 const fs = require('fs');
 const path = require('path');
-const login = require('fca-unofficial');
+const { Zalo, ThreadType } = require('zca-js');
 const express = require('express');
 
 // Tạo web server đơn giản để Render không bị tắt bot (ngủ đông)
@@ -11,7 +11,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get('/', (req, res) => {
-    res.send('THP Bot is running 24/7!');
+    res.send('THP Zalo Bot is running 24/7!');
 });
 
 app.listen(PORT, () => {
@@ -50,7 +50,7 @@ function saveDatabase() {
     fs.writeFileSync(dbFile, JSON.stringify(data, null, 2));
 }
 
-const ADMIN_ID = "0344262218";
+const ADMIN_ID = "0344262218"; // Thay số điện thoại hoặc ID Zalo chủ bot nếu cần
 
 function getAndDecreaseTurn(threadId, senderId = null) {
     if (senderId === ADMIN_ID) {
@@ -103,29 +103,23 @@ function calculateRental(currentExpiry, addDays = null, isVohan = false) {
     return { timeLeftStr, expiryDateStr, rawExpiry: expiryDate.toISOString() };
 }
 
-async function handleIncomingMessage(api, event) {
-    const { threadID, senderID, body, type, messageReply, logMessageType, author } = event;
-    const threadId = threadID;
-    const senderId = senderID || author;
-    const text = body ? body.trim() : "";
+async function handleIncomingMessage(api, message) {
+    const threadId = message.threadId;
+    const senderId = message.uidFrom;
+    const content = message.data && message.data.content ? message.data.content.trim() : "";
+    const threadType = message.type; // ThreadType.User hoặc ThreadType.Group
+    const messageReply = message.data && message.data.quote ? message.data.quote : null;
 
-    if (antiSettings[threadId] && senderId !== ADMIN_ID && senderId !== api.getCurrentUserID()) {
-        if (logMessageType === "log:thread-name" && antiSettings[threadId].antiName) {
-            api.removeUserFromGroup(senderId, threadId, (err) => {
-                if (err) console.error("Lỗi kick thành viên đổi tên:", err);
-            });
-            return;
-        }
-    }
+    if (!content) return;
+    const text = content;
 
-    if (!text) return;
-
+    // Xử lý logic CPR
     if (/^cpr\d+$/i.test(text)) {
         const targetPts = parseInt(text.replace(/cpr/i, ""));
         const groupTeams = teams[threadId] || [];
 
         if (groupTeams.length === 0) {
-            await api.sendMessage({ body: "⚠️ Danh sách .hs list của nhóm đang trống! Vui lòng thêm team bằng lệnh .hs add trước." }, threadId);
+            await api.sendMessage({ msg: "⚠️ Danh sách .hs list của nhóm đang trống! Vui lòng thêm team bằng lệnh .hs add trước." }, threadId, threadType);
             return;
         }
 
@@ -139,32 +133,32 @@ async function handleIncomingMessage(api, event) {
         resultText += `----------------------------------\n`;
         resultText += `💡 Dựa trên danh sách .hs list hiện tại của nhóm.`;
 
-        await api.sendMessage({ body: resultText }, threadId);
+        await api.sendMessage({ msg: resultText }, threadId, threadType);
         return;
     }
 
     if (text === ".hs all") {
         if (senderId !== ADMIN_ID) {
-            await api.sendMessage({ body: "❌ Chỉ Admin mới được xóa toàn bộ danh sách team!" }, threadId);
+            await api.sendMessage({ msg: "❌ Chỉ Admin mới được xóa toàn bộ danh sách team!" }, threadId, threadType);
             return;
         }
 
         teams[threadId] = [];
         saveDatabase();
 
-        await api.sendMessage({ body: "🗑️ Đã xóa toàn bộ dữ liệu trong danh sách .hs list của nhóm này!" }, threadId);
+        await api.sendMessage({ msg: "🗑️ Đã xóa toàn bộ dữ liệu trong danh sách .hs list của nhóm này!" }, threadId, threadType);
         return;
     }
 
     if (text.startsWith(".hs xoa ")) {
         const query = text.slice(8).trim();
         if (!query) {
-            await api.sendMessage({ body: "⚠️ Vui lòng nhập tên team hoặc ID cần xóa! Ví dụ: .hs xoa TeamA" }, threadId);
+            await api.sendMessage({ msg: "⚠️ Vui lòng nhập tên team hoặc ID cần xóa! Ví dụ: .hs xoa TeamA" }, threadId, threadType);
             return;
         }
 
         if (!teams[threadId] || teams[threadId].length === 0) {
-            await api.sendMessage({ body: "📋 Danh sách team hiện đang trống!" }, threadId);
+            await api.sendMessage({ msg: "📋 Danh sách team hiện đang trống!" }, threadId, threadType);
             return;
         }
 
@@ -179,29 +173,29 @@ async function handleIncomingMessage(api, event) {
         });
 
         if (teams[threadId].length === initialLength) {
-            await api.sendMessage({ body: `⚠️ Không tìm thấy team phù hợp với "${query}" trong danh sách!` }, threadId);
+            await api.sendMessage({ msg: `⚠️ Không tìm thấy team phù hợp với "${query}" trong danh sách!` }, threadId, threadType);
             return;
         }
 
         saveDatabase();
-        await api.sendMessage({ body: `✅ Đã xóa thành công team khớp với "${query}" khỏi danh sách .hs list!` }, threadId);
+        await api.sendMessage({ msg: `✅ Đã xóa thành công team khớp với "${query}" khỏi danh sách .hs list!` }, threadId, threadType);
         return;
     }
 
     if (text.startsWith(".hs add ")) {
-        const content = text.slice(8).trim();
-        const firstSpaceIndex = content.indexOf(" ");
+        const contentStr = text.slice(8).trim();
+        const firstSpaceIndex = contentStr.indexOf(" ");
 
         if (firstSpaceIndex === -1) {
-            await api.sendMessage({ body: "⚠️ Cú pháp sai! Dùng: .hs add [id game] [tên team]" }, threadId);
+            await api.sendMessage({ msg: "⚠️ Cú pháp sai! Dùng: .hs add [id game] [tên team]" }, threadId, threadType);
             return;
         }
 
-        const gameId = content.slice(0, firstSpaceIndex).trim();
-        const teamName = content.slice(firstSpaceIndex + 1).trim();
+        const gameId = contentStr.slice(0, firstSpaceIndex).trim();
+        const teamName = contentStr.slice(firstSpaceIndex + 1).trim();
 
         if (!gameId || !teamName) {
-            await api.sendMessage({ body: "⚠️ ID game hoặc tên team không được để trống!" }, threadId);
+            await api.sendMessage({ msg: "⚠️ ID game hoặc tên team không được để trống!" }, threadId, threadType);
             return;
         }
 
@@ -212,7 +206,7 @@ async function handleIncomingMessage(api, event) {
         teams[threadId].push({ id: gameId, name: teamName });
         saveDatabase();
 
-        await api.sendMessage({ body: `✅ Đã thêm thành công team [${teamName}] với ID [${gameId}] vào danh sách!` }, threadId);
+        await api.sendMessage({ msg: `✅ Đã thêm thành công team [${teamName}] với ID [${gameId}] vào danh sách!` }, threadId, threadType);
         return;
     }
 
@@ -220,7 +214,7 @@ async function handleIncomingMessage(api, event) {
         const groupTeams = teams[threadId] || [];
 
         if (groupTeams.length === 0) {
-            await api.sendMessage({ body: "📋 Danh sách team hiện đang trống!" }, threadId);
+            await api.sendMessage({ msg: "📋 Danh sách team hiện đang trống!" }, threadId, threadType);
             return;
         }
 
@@ -230,7 +224,7 @@ async function handleIncomingMessage(api, event) {
         });
         listMsg += "\nReply số thứ tự để xem info | del + stt để xóa | page [số] để chuyển trang.";
 
-        await api.sendMessage({ body: listMsg }, threadId);
+        await api.sendMessage({ msg: listMsg }, threadId, threadType);
         return;
     }
 
@@ -239,7 +233,7 @@ async function handleIncomingMessage(api, event) {
         const gameId = parts[1];
 
         if (!gameId) {
-            await api.sendMessage({ body: "⚠️ Vui lòng nhập ID game! Ví dụ: .td 12345 hoặc .td 12345 xoa2" }, threadId);
+            await api.sendMessage({ msg: "⚠️ Vui lòng nhập ID game! Ví dụ: .td 12345 hoặc .td 12345 xoa2" }, threadId, threadType);
             return;
         }
 
@@ -271,14 +265,9 @@ async function handleIncomingMessage(api, event) {
 .tdlg [id] [xoaN] [cprN]
 .tdlg [id] [key] [xoaN] [cprN]
 
-• Chú thích:
-  » xoaN: Xóa trận lỗi (N là STT trận, vd: xoa1,2,3)
-  » cprN: Tính CPR (N là điểm CPR cần đạt, vd: cpr41)
+📌 Trả lời (reply) tin nhắn này bằng số tương ứng để chọn khung giờ (vd: 3,4)`;
 
-📌 Trả lời (reply/quote) tin nhắn này bằng số tương ứng để chọn khung giờ.
-(Có thể chọn nhiều khung giờ, cách nhau bằng dấu phẩy, vd: 3,4)`;
-
-        await api.sendMessage({ body: timeSlotMenu }, threadId);
+        await api.sendMessage({ msg: timeSlotMenu }, threadId, threadType);
         return;
     }
 
@@ -297,25 +286,18 @@ async function handleIncomingMessage(api, event) {
 
 • Hướng dẫn sử dụng:
 .tdlg [id] [xoaN] [cprN]
-.tdlg [id] [key] [xoaN] [cprN]
+.tdlg [id] [key] [xoaN] [cprN]`;
 
-• Chú thích:
-  » xoaN: Xóa trận lỗi (N là STT trận, vd: xoa1,2,3)
-  » cprN: Tính CPR (N là điểm CPR cần đạt, vd: cpr41)`;
-
-        let msgOptions = {
-            body: guideMenu
-        };
-
+        let msgOptions = { msg: guideMenu };
         if (fs.existsSync(imagePath)) {
-            msgOptions.attachment = fs.createReadStream(imagePath);
+            msgOptions.filePath = imagePath;
         }
 
-        await api.sendMessage(msgOptions, threadId);
+        await api.sendMessage(msgOptions, threadId, threadType);
         return;
     }
 
-    if (messageReply && messageReply.body && messageReply.body.includes("⏳ Vui lòng chọn khung giờ tính điểm:")) {
+    if (messageReply && messageReply.content && messageReply.content.includes("⏳ Vui lòng chọn khung giờ tính điểm:")) {
         const timeSlots = {
             "1": "13:00 ➟ 15:00",
             "2": "15:00 ➟ 17:00",
@@ -341,14 +323,14 @@ async function handleIncomingMessage(api, event) {
         }
 
         if (!isValid || selectedSlots.length === 0) {
-            await api.sendMessage("⚠️ Lựa chọn không hợp lệ! Vui lòng reply lại bằng số (ví dụ: 3,4 hoặc 1).", threadId);
+            await api.sendMessage({ msg: "⚠️ Lựa chọn không hợp lệ! Vui lòng reply lại bằng số (ví dụ: 3,4 hoặc 1)." }, threadId, threadType);
             return;
         }
 
-        let gameIdMatch = messageReply.body.match(/\[ID:\s*([^\]]+)\]/);
+        let gameIdMatch = messageReply.content.match(/\[ID:\s*([^\]]+)\]/);
         let gameId = gameIdMatch ? gameIdMatch[1] : "Không rõ";
 
-        let xoaMatch = messageReply.body.match(/\[XoaSTT:\s*(\d+)\]/);
+        let xoaMatch = messageReply.content.match(/\[XoaSTT:\s*(\d+)\]/);
         let xoaLine = xoaMatch ? `🗑️ Đã xóa: ${xoaMatch[1]}\n` : "";
 
         const timeFormatted = `${selectedSlots.join(", ")}`;
@@ -359,105 +341,75 @@ async function handleIncomingMessage(api, event) {
 📊 ID: ${gameId}
 🎯 Số trận: 1
 ⏳ Khung giờ: ${timeFormatted}
-🔑 Key: THP
-`;
+🔑 Key: THP\n`;
         if (xoaLine) {
             resultMessage += xoaLine;
         }
         resultMessage += `🎟 Bạn còn lại: ${remainingTurnStr}`;
 
-        let msgOptions = {
-            body: resultMessage
-        };
-
+        let msgOptions = { msg: resultMessage };
         if (fs.existsSync(imagePath)) {
-            msgOptions.attachment = fs.createReadStream(imagePath);
+            msgOptions.filePath = imagePath;
         }
 
-        await api.sendMessage(msgOptions, threadId);
+        await api.sendMessage(msgOptions, threadId, threadType);
         return;
     }
 
     if (text.startsWith(".tg")) {
-        api.getThreadInfo(threadId, async (err, info) => {
-            const boxName = (!err && info && info.threadName) ? info.threadName : "Nhóm này";
-            const args = text.split(/\s+/);
-            const subCommand = args[1] ? args[1].toLowerCase() : "";
+        const boxName = "Nhóm Zalo này";
+        const args = text.split(/\s+/);
+        const subCommand = args[1] ? args[1].toLowerCase() : "";
 
-            if (subCommand === "30ngay") {
-                if (senderId !== ADMIN_ID) {
-                    await api.sendMessage({ body: "❌ Chỉ chủ bot mới có quyền gia hạn thời gian thuê!" }, threadId);
-                    return;
-                }
-                const currentData = groupRentalExpiry[threadId];
-                const calc = calculateRental(currentData, 30, false);
-                groupRentalExpiry[threadId] = calc.rawExpiry;
-                saveDatabase();
-
-                const replyMsg = `📅 THÔNG BÁO BOX ĐƯỢC GIA HẠN THUÊ BOT
-📦 Nhóm:
-${boxName}
-⏳ Thời hạn còn lại:
-${calc.timeLeftStr}
-📆 Hết hạn:
-${calc.expiryDateStr}
-💙 Cảm ơn bạn đã sử dụng dịch vụ thuê BOT THP của chúng tôi.`;
-
-                await api.sendMessage({ body: replyMsg }, threadId);
+        if (subCommand === "30ngay") {
+            if (senderId !== ADMIN_ID) {
+                await api.sendMessage({ msg: "❌ Chỉ chủ bot mới có quyền gia hạn thời gian thuê!" }, threadId, threadType);
                 return;
             }
-
-            if (subCommand === "vohan") {
-                if (senderId !== ADMIN_ID) {
-                    await api.sendMessage({ body: "❌ Chỉ chủ bot mới có quyền cấp vĩnh viễn!" }, threadId);
-                    return;
-                }
-                groupRentalExpiry[threadId] = "vohan";
-                saveDatabase();
-
-                const replyMsg = `📅 THÔNG BÁO BOX ĐƯỢC GIA HẠN THUÊ BOT
-📦 Nhóm:
-${boxName}
-⏳ Thời hạn còn lại:
-Vĩnh viễn
-📆 Hết hạn:
-Vĩnh viễn
-💙 Cảm ơn bạn đã sử dụng dịch vụ thuê BOT THP của chúng tôi.`;
-
-                await api.sendMessage({ body: replyMsg }, threadId);
-                return;
-            }
-
             const currentData = groupRentalExpiry[threadId];
-            let calc;
-            if (currentData === "vohan") {
-                calc = { timeLeftStr: "Vĩnh viễn", expiryDateStr: "Vĩnh viễn" };
-            } else {
-                calc = calculateRental(currentData, null, false);
+            const calc = calculateRental(currentData, 30, false);
+            groupRentalExpiry[threadId] = calc.rawExpiry;
+            saveDatabase();
+
+            const replyMsg = `📅 THÔNG BÁO BOX ĐƯỢC GIA HẠN THUÊ BOT\n📦 Nhóm: ${boxName}\n⏳ Thời hạn còn lại: ${calc.timeLeftStr}\n📆 Hết hạn: ${calc.expiryDateStr}\n💙 Cảm ơn bạn đã sử dụng dịch vụ thuê BOT THP.`;
+            await api.sendMessage({ msg: replyMsg }, threadId, threadType);
+            return;
+        }
+
+        if (subCommand === "vohan") {
+            if (senderId !== ADMIN_ID) {
+                await api.sendMessage({ msg: "❌ Chỉ chủ bot mới có quyền cấp vĩnh viễn!" }, threadId, threadType);
+                return;
             }
+            groupRentalExpiry[threadId] = "vohan";
+            saveDatabase();
 
-            const statusMsg = `📅 THÔNG BÁO THỜI HẠN THUÊ BOT
-📦 Nhóm:
-${boxName}
-⏳ Thời hạn còn lại:
-${calc.timeLeftStr}
-📆 Hết hạn:
-${calc.expiryDateStr}
-💙 Cảm ơn bạn đã sử dụng dịch vụ thuê BOT THP của chúng tôi.`;
+            const replyMsg = `📅 THÔNG BÁO BOX ĐƯỢC GIA HẠN THUÊ BOT\n📦 Nhóm: ${boxName}\n⏳ Thời hạn còn lại: Vĩnh viễn\n📆 Hết hạn: Vĩnh viễn\n💙 Cảm ơn bạn đã sử dụng dịch vụ thuê BOT THP.`;
+            await api.sendMessage({ msg: replyMsg }, threadId, threadType);
+            return;
+        }
 
-            await api.sendMessage({ body: statusMsg }, threadId);
-        });
+        const currentData = groupRentalExpiry[threadId];
+        let calc;
+        if (currentData === "vohan") {
+            calc = { timeLeftStr: "Vĩnh viễn", expiryDateStr: "Vĩnh viễn" };
+        } else {
+            calc = calculateRental(currentData, null, false);
+        }
+
+        const statusMsg = `📅 THÔNG BÁO THỜI HẠN THUÊ BOT\n📦 Nhóm: ${boxName}\n⏳ Thời hạn còn lại: ${calc.timeLeftStr}\n📆 Hết hạn: ${calc.expiryDateStr}\n💙 Cảm ơn bạn đã sử dụng dịch vụ thuê BOT THP.`;
+        await api.sendMessage({ msg: statusMsg }, threadId, threadType);
         return;
     }
 
-    if (messageReply && messageReply.body && messageReply.body.includes("📑 BOT THP") && messageReply.body.includes("Reply số")) {
+    if (messageReply && messageReply.content && messageReply.content.includes("📑 BOT THP") && messageReply.content.includes("Reply số")) {
         if (senderId !== ADMIN_ID) {
-            await api.sendMessage("❌ Chỉ Admin mới được cấu hình Anti!", threadId);
+            await api.sendMessage({ msg: "❌ Chỉ Admin mới được cấu hình Anti!" }, threadId, threadType);
             return;
         }
         const choice = parseInt(text);
         if (isNaN(choice) || choice < 1 || choice > 8) {
-            await api.sendMessage("⚠️ Lựa chọn không hợp lệ! Vui lòng reply một số từ 1 đến 8.", threadId);
+            await api.sendMessage({ msg: "⚠️ Lựa chọn không hợp lệ! Vui lòng reply một số từ 1 đến 8." }, threadId, threadType);
             return;
         }
 
@@ -467,45 +419,24 @@ ${calc.expiryDateStr}
 
         let featName = "";
         switch(choice) {
-            case 1:
-                antiSettings[threadId].antiLink = !antiSettings[threadId].antiLink;
-                featName = "Anti gửi link";
-                break;
-            case 2:
-                antiSettings[threadId].antiTagAll = !antiSettings[threadId].antiTagAll;
-                featName = "Anti tag all";
-                break;
+            case 1: antiSettings[threadId].antiLink = !antiSettings[threadId].antiLink; featName = "Anti gửi link"; break;
+            case 2: antiSettings[threadId].antiTagAll = !antiSettings[threadId].antiTagAll; featName = "Anti tag all"; break;
             case 3:
-            case 7:
-                antiSettings[threadId].antiName = !antiSettings[threadId].antiName;
-                featName = "Anti đổi tên nhóm";
-                break;
-            case 4:
-                antiSettings[threadId].antiAdmin = !antiSettings[threadId].antiAdmin;
-                featName = "Anti thay đổi QTV";
-                break;
-            case 5:
-                antiSettings[threadId].antiLeave = !antiSettings[threadId].antiLeave;
-                featName = "Anti rời nhóm";
-                break;
-            case 6:
-                antiSettings[threadId].antiImage = !antiSettings[threadId].antiImage;
-                featName = "Anti đổi ảnh nhóm";
-                break;
-            case 8:
-                antiSettings[threadId].antiSpam = !antiSettings[threadId].antiSpam;
-                featName = "Anti đổi spam tin nhắn";
-                break;
+            case 7: antiSettings[threadId].antiName = !antiSettings[threadId].antiName; featName = "Anti đổi tên nhóm"; break;
+            case 4: antiSettings[threadId].antiAdmin = !antiSettings[threadId].antiAdmin; featName = "Anti thay đổi QTV"; break;
+            case 5: antiSettings[threadId].antiLeave = !antiSettings[threadId].antiLeave; featName = "Anti rời nhóm"; break;
+            case 6: antiSettings[threadId].antiImage = !antiSettings[threadId].antiImage; featName = "Anti đổi ảnh nhóm"; break;
+            case 8: antiSettings[threadId].antiSpam = !antiSettings[threadId].antiSpam; featName = "Anti spam tin nhắn"; break;
         }
 
         saveDatabase();
-        await api.sendMessage(`🛡 Đã cập nhật tính năng [${featName}] thành công cho nhóm này!`, threadId);
+        await api.sendMessage({ msg: `🛡 Đã cập nhật tính năng [${featName}] thành công cho nhóm này!` }, threadId, threadType);
         return;
     }
 
     if (text === ".anti") {
         if (senderId !== ADMIN_ID) {
-            await api.sendMessage("❌ Chỉ Admin mới được dùng lệnh này!", threadId);
+            await api.sendMessage({ msg: "❌ Chỉ Admin mới được dùng lệnh này!" }, threadId, threadType);
             return;
         }
         const menuMsg = `📑 BOT THP
@@ -516,17 +447,17 @@ ${calc.expiryDateStr}
 4. Anti thay đổi QTV
 5. Anti rời nhóm 
 6. Anti đổi ảnh nhóm 
-7. Anti đổi tên nhóm                           
-8. Anti đổi spam tin nhắn  
+7. Anti đổi tên nhóm                                        
+8. Anti spam tin nhắn  
 ──────────────
 ↩️ Reply số (1-8) để chọn.`;
-        await api.sendMessage(menuMsg, threadId);
+        await api.sendMessage({ msg: menuMsg }, threadId, threadType);
         return;
     }
 
     if (text.startsWith(".tangluot ")) {
         if (senderId !== ADMIN_ID) {
-            await api.sendMessage({ body: "❌ Chỉ chủ bot mới có quyền sử dụng lệnh này!" }, threadId);
+            await api.sendMessage({ msg: "❌ Chỉ chủ bot mới có quyền sử dụng lệnh này!" }, threadId, threadType);
             return;
         }
         const args = text.split(" ");
@@ -534,7 +465,7 @@ ${calc.expiryDateStr}
         const amount = parseInt(args[2]);
 
         if (!targetUserId || isNaN(amount)) {
-            await api.sendMessage({ body: "⚠️ Cú pháp sai! Dùng: .tangluot [UID] [số lượt]" }, threadId);
+            await api.sendMessage({ msg: "⚠️ Cú pháp sai! Dùng: .tangluot [UID] [số lượt]" }, threadId, threadType);
             return;
         }
 
@@ -543,13 +474,13 @@ ${calc.expiryDateStr}
         userRemainingTurns[personalKey] += amount;
         saveDatabase();
 
-        await api.sendMessage({ body: `✅ Đã tăng ${amount} lượt cho user ${targetUserId}. Tổng hiện tại: ${userRemainingTurns[personalKey]} lượt.` }, threadId);
+        await api.sendMessage({ msg: `✅ Đã tăng ${amount} lượt cho user ${targetUserId}. Tổng hiện tại: ${userRemainingTurns[personalKey]} lượt.` }, threadId, threadType);
         return;
     }
 
     if (text.startsWith(".giamluot ")) {
         if (senderId !== ADMIN_ID) {
-            await api.sendMessage({ body: "❌ Chỉ chủ bot mới có quyền sử dụng lệnh này!" }, threadId);
+            await api.sendMessage({ msg: "❌ Chỉ chủ bot mới có quyền sử dụng lệnh này!" }, threadId, threadType);
             return;
         }
         const args = text.split(" ");
@@ -557,7 +488,7 @@ ${calc.expiryDateStr}
         const amount = parseInt(args[2]);
 
         if (!targetUserId || isNaN(amount)) {
-            await api.sendMessage({ body: "⚠️ Cú pháp sai! Dùng: .giamluot [UID] [số lượt]" }, threadId);
+            await api.sendMessage({ msg: "⚠️ Cú pháp sai! Dùng: .giamluot [UID] [số lượt]" }, threadId, threadType);
             return;
         }
 
@@ -567,32 +498,40 @@ ${calc.expiryDateStr}
         userRemainingTurns[personalKey] = Math.max(0, userRemainingTurns[personalKey] - amount);
         saveDatabase();
 
-        await api.sendMessage({ body: `✅ Đã giảm ${amount} lượt của user ${targetUserId}. Tổng hiện tại: ${userRemainingTurns[personalKey]} lượt.` }, threadId);
+        await api.sendMessage({ msg: `✅ Đã giảm ${amount} lượt của user ${targetUserId}. Tổng hiện tại: ${userRemainingTurns[personalKey]} lượt.` }, threadId, threadType);
         return;
     }
 
     if (text === ".luotdung") {
         const personalKey = `${threadId}_${senderId}`;
         if (userRemainingTurns[personalKey] === undefined) userRemainingTurns[personalKey] = 100;
-        await api.sendMessage({ body: `📋 Lượt dùng của bạn: ${userRemainingTurns[personalKey]} lượt` }, threadId);
+        await api.sendMessage({ msg: `📋 Lượt dùng của bạn: ${userRemainingTurns[personalKey]} lượt` }, threadId, threadType);
         return;
     }
 }
 
-if (fs.existsSync('appstate.json')) {
-    const appState = JSON.parse(fs.readFileSync('appstate.json', 'utf8'));
-    login({ appState: appState }, (err, api) => {
-        if (err) return console.error("Lỗi đăng nhập bot:", err);
+async function startBot() {
+    try {
+        console.log("Đang khởi động THP Zalo Bot...");
+        const zalo = new Zalo();
+        
+        // Đăng nhập bằng cách quét mã QR hiển thị trực tiếp trong phần Logs của Render
+        const api = await zalo.loginQR();
+        console.log("THP Zalo Bot script loaded successfully and logged in!");
 
-        console.log("THP Bot script loaded successfully!");
-
-        api.listenMqtt((err, event) => {
-            if (err) return console.error("Lỗi lắng nghe sự kiện:", err);
-            if (event.type === "message" || event.type === "event" || event.logMessageType) {
-                handleIncomingMessage(api, event);
+        api.listener.on("message", async (message) => {
+            try {
+                if (message.isSelf) return;
+                await handleIncomingMessage(api, message);
+            } catch (err) {
+                console.error("Lỗi lắng nghe sự kiện tin nhắn:", err);
             }
         });
-    });
-} else {
-    console.log("Không tìm thấy file appstate.json! Vui lòng bỏ appstate vào thư mục C:\\bot\\thp-bot");
+
+        api.listener.start();
+    } catch (error) {
+        console.log("Lỗi khởi động bot Zalo:", error);
+    }
 }
+
+startBot();
