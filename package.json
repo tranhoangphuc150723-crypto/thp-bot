@@ -6,6 +6,6 @@
     "start": "node bot.js"
   },
   "dependencies": {
-    "zca-js": "^latest"
+    "zca-js": "latest"
   }
 }
